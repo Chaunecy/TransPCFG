@@ -165,45 +165,62 @@ int main(int argc, char *argv[]) {
     std::string training_set;
     std::vector<std::string> vec;
     bool rm_existed = false;
+    int start_from = 8;
     // parse arguments
-    if (argc == 1) {
-        help();
-    }
+    auto cli_trained_model = clipp::in_sequence(
+            clipp::required("--trained-model") &
+            clipp::value("path to save the trained model", model_output_path).call([&]() {
+                if (model_output_path[model_output_path.size() - 1] != PATH_DELIMITER)
+                    model_output_path += PATH_DELIMITER;
+                create_dir(model_output_path.c_str());
+                tmp_model_output_path = model_output_path + "model" + PATH_DELIMITER;
+                create_dir(tmp_model_output_path.c_str());
+            }),
+            clipp::option("--rm-existed").set(rm_existed).call([&]() {
+                std::cerr << "Remove existed model" << std::endl;
+                std::string digit_folder = tmp_model_output_path + PATH_DELIMITER + "digits";
+                std::string special_folder = tmp_model_output_path + PATH_DELIMITER + "special";
+                std::string struct_folder = tmp_model_output_path + PATH_DELIMITER + "grammar";
+                rm_dir(digit_folder);
+                rm_dir(special_folder);
+                rm_dir(struct_folder);
+            }).doc("remove model with same path, must be put after --trained-model flag"));
     auto cmd = (clipp::required("--training-set") & clipp::value("path of training set", training_set),
-            clipp::required("--trained-model") & clipp::value("path to save the trained model", model_output_path),
-            clipp::option("--train-length-min") & clipp::value("min length to transfer", transfer_min_len),
-            clipp::option("--train-length-max") & clipp::value("max length to transfer", transfer_max_len),
+            cli_trained_model,
+            clipp::option("--train-length-min") &
+            clipp::value("min length to transfer", transfer_min_len).call([&]() {
+                if (transfer_min_len < 0) {
+                    std::cerr << "REPLACE " << transfer_min_len << " with " << 1 << std::endl;
+                    transfer_min_len = 1;
+                } else if (transfer_min_len > transfer_max_len) {
+                    std::cerr << "MIN LEN larger than MAX LEN, set min len to " << transfer_max_len << std::endl;
+                    transfer_min_len = transfer_max_len;
+                }
+            }),
+            clipp::option("--train-length-max") &
+            clipp::value("max length to transfer", transfer_max_len).call([&]() {
+                if (transfer_max_len < transfer_min_len) {
+                    std::cerr << "MIN LEN less than MAX LEN, set max len to " << transfer_min_len << std::endl;
+                    transfer_max_len = transfer_min_len;
+                }
+            }),
             clipp::required("--dictionaries") &
             clipp::value("external dictionary, one item per line", external_dict_path),
-            clipp::option("--rm-existed").set(rm_existed).doc("remove model with same path")
+            clipp::option("--start-from") & clipp::number("Combination start from", start_from).call([&start_from]() {
+                std::cout << "start from: " << start_from << std::endl;
+            }),
+            clipp::option("-h", "--help") % "show help"
     );
     if (!clipp::parse(argc, argv, cmd)) {
-        std::cerr << clipp::make_man_page(cmd, argv[0]) << std::endl;
+        auto fmt = clipp::doc_formatting{}.doc_column(31);
+        std::cerr << clipp::make_man_page(cmd, argv[0], fmt) << std::endl;
         std::exit(1);
-    } else {
-        if (model_output_path[model_output_path.size() - 1] != PATH_DELIMITER)
-            model_output_path += PATH_DELIMITER;
-        create_dir(model_output_path.c_str());
-        tmp_model_output_path = model_output_path + "model" + PATH_DELIMITER;
-        create_dir(tmp_model_output_path.c_str());
-        if (rm_existed) {
-            std::string digit_folder = tmp_model_output_path + PATH_DELIMITER + "digits";
-            std::string special_folder = tmp_model_output_path + PATH_DELIMITER + "special";
-            std::string struct_folder = tmp_model_output_path + PATH_DELIMITER + "grammar";
-            rm_dir(digit_folder);
-            rm_dir(special_folder);
-            rm_dir(struct_folder);
-        }
     }
-
-
     std::string line;
-
     if (transfer_min_len > transfer_max_len) {
         std::cerr << "Error: min length larger than max length!" << std::endl;
         return -1;
     }
-
     training_set_size = get_training_set_size(training_set.c_str());
     if (training_set_size == -2) {
         return -1;
@@ -227,15 +244,14 @@ int main(int argc, char *argv[]) {
         if (transfer_min_len <= size && size <= transfer_max_len) {
             useful_set_size += 1;
             extract_structure(line.c_str(), size);
-
             extract_digit(line.c_str(), size, 1, digit_map_long);
             extract_letter(line.c_str(), size, 1, letter_map_long);
             extract_special(line.c_str(), size, 1, special_map_long);
-        } else if (size >= 8 && size < transfer_min_len) {
+        } else if (size >= start_from && size < transfer_min_len) {
             extract_digit(line.c_str(), size, size, digit_map_short);
             extract_letter(line.c_str(), size, size, letter_map_short);
             extract_special(line.c_str(), size, size, special_map_short);
-        } else if (0 < size && size < 8) {
+        } else if (0 < size && size < start_from) {
             extract_digit(line.c_str(), size, 1, digit_map_short);
             extract_letter(line.c_str(), size, 1, letter_map_short);
             extract_special(line.c_str(), size, 1, special_map_short);
