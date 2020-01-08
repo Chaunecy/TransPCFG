@@ -7,12 +7,12 @@
 #include <fstream>
 #include <deque>
 #include <queue>
-#include <sstream>
 #include <map>
 #include <algorithm>
 #include <sys/stat.h>
 #include <utility>
 #include <dirent.h>
+#include "include/clipp.h"
 
 
 #ifdef _WIN32
@@ -137,11 +137,11 @@ void help();
 
 void extract_structure(const char *line, int size);
 
-void extract_digit(const char *line, int size, int min_len, std::map<std::string, int> &digit_map);
+void extract_digit(const char *line, int size, unsigned int min_len, std::map<std::string, int> &digit_map);
 
-void extract_letter(const char *line, int size, int min_len, std::map<std::string, int> &letter_map);
+void extract_letter(const char *line, int size, unsigned int min_len, std::map<std::string, int> &letter_map);
 
-void extract_special(const char *line, int size, int min_len, std::map<std::string, int> &special_map);
+void extract_special(const char *line, int size, unsigned int min_len, std::map<std::string, int> &special_map);
 
 bool negative_sort_structure(Structure *e1, Structure *e2);
 
@@ -164,52 +164,38 @@ int rm_dir(const std::string &dir_full_path);
 int main(int argc, char *argv[]) {
     std::string training_set;
     std::vector<std::string> vec;
+    bool rm_existed = false;
     // parse arguments
     if (argc == 1) {
         help();
     }
-    std::string _training_set = "--training-set";
-    std::string _train_length_min = "--train-length-min";
-    std::string _train_length_max = "--train-length-max";
-    std::string _trained_model = "--trained-model";
-    std::string _dictionaries = "--dictionaries";
-    std::string _remove_existed_model = "--rm-existed";
-    for (int i = 1; i < argc; i++) {
-        if (strncmp(argv[i], _training_set.c_str(), _training_set.length()) == 0) {
-            i += 1;
-            training_set = argv[i];
-        } else if (strncmp(argv[i], _train_length_min.c_str(), _train_length_min.length()) == 0) {
-            i += 1;
-            transfer_min_len = (int) strtol(argv[i], nullptr, 0);
-        } else if (strncmp(argv[i], _train_length_max.c_str(), _train_length_max.length()) == 0) {
-            i += 1;
-            transfer_max_len = (int) strtol(argv[i], nullptr, 0);
-        } else if (strncmp(argv[i], _trained_model.c_str(), _trained_model.length()) == 0) {
-            i += 1;
-            model_output_path = argv[i];
-            if (model_output_path[model_output_path.size() - 1] != PATH_DELIMITER) {
-                model_output_path += PATH_DELIMITER;
-            }
-            create_dir(model_output_path.c_str());
-            tmp_model_output_path = model_output_path + "model" + PATH_DELIMITER;
-            create_dir(tmp_model_output_path.c_str());
-        } else if (strncmp(argv[i], _dictionaries.c_str(), _dictionaries.length()) == 0) {
-            i += 1;
-            external_dict_path = argv[i];
-        } else if (strncmp(argv[i], _remove_existed_model.c_str(), _remove_existed_model.length()) == 0) {
-            if (!tmp_model_output_path.empty()) {
-                std::string digit_folder = tmp_model_output_path + PATH_DELIMITER + "digits";
-                std::string special_folder = tmp_model_output_path + PATH_DELIMITER + "special";
-                std::string struct_folder = tmp_model_output_path + PATH_DELIMITER + "grammar";
-                rm_dir(digit_folder);
-                rm_dir(special_folder);
-                rm_dir(struct_folder);
-            } else {
-                std::cerr << "Error, --trained-model should be specified before --rm-existed" << std::endl;
-                std::exit(-1);
-            }
+    auto cmd = (clipp::required("--training-set") & clipp::value("path of training set", training_set),
+            clipp::required("--trained-model") & clipp::value("path to save the trained model", model_output_path),
+            clipp::option("--train-length-min") & clipp::value("min length to transfer", transfer_min_len),
+            clipp::option("--train-length-max") & clipp::value("max length to transfer", transfer_max_len),
+            clipp::required("--dictionaries") &
+            clipp::value("external dictionary, one item per line", external_dict_path),
+            clipp::option("--rm-existed").set(rm_existed).doc("remove model with same path")
+    );
+    if (!clipp::parse(argc, argv, cmd)) {
+        std::cerr << clipp::make_man_page(cmd, argv[0]) << std::endl;
+        std::exit(1);
+    } else {
+        if (model_output_path[model_output_path.size() - 1] != PATH_DELIMITER)
+            model_output_path += PATH_DELIMITER;
+        create_dir(model_output_path.c_str());
+        tmp_model_output_path = model_output_path + "model" + PATH_DELIMITER;
+        create_dir(tmp_model_output_path.c_str());
+        if (rm_existed) {
+            std::string digit_folder = tmp_model_output_path + PATH_DELIMITER + "digits";
+            std::string special_folder = tmp_model_output_path + PATH_DELIMITER + "special";
+            std::string struct_folder = tmp_model_output_path + PATH_DELIMITER + "grammar";
+            rm_dir(digit_folder);
+            rm_dir(special_folder);
+            rm_dir(struct_folder);
         }
     }
+
 
     std::string line;
 
@@ -283,9 +269,7 @@ void extract_structure(const char *line, int size) {
     for (int i = 0; i < size; i++) {
         if ('0' <= line[i] && '9' >= line[i]) {
             result += "D";
-        } else if ('a' <= line[i] && 'z' >= line[i]) {
-            result += "L";
-        } else if ('A' <= line[i] && 'Z' >= line[i]) {
+        } else if (('a' <= line[i] && 'z' >= line[i]) || ('A' <= line[i] && 'Z' >= line[i])) {
             result += "L";
         } else if (0 <= (int) line[i] && 127 >= (int) line[i]) {
             result += "S";
@@ -302,7 +286,7 @@ void extract_structure(const char *line, int size) {
 }
 
 // extract digit part
-void extract_digit(const char *line, int size, int min_len, std::map<std::string, int> &digit_map) {
+void extract_digit(const char *line, int size, unsigned int min_len, std::map<std::string, int> &digit_map) {
     std::vector<std::string> d;
     std::string val;
     for (int i = 0; i < size; i++) {
@@ -329,13 +313,11 @@ void extract_digit(const char *line, int size, int min_len, std::map<std::string
 }
 
 // extract letter part
-void extract_letter(const char *line, int size, int min_len, std::map<std::string, int> &letter_map) {
+void extract_letter(const char *line, int size, unsigned int min_len, std::map<std::string, int> &letter_map) {
     std::vector<std::string> l;
     std::string val;
     for (int i = 0; i < size; i++) {
-        if (line[i] >= 'a' && line[i] <= 'z') {
-            val += line[i];
-        } else if (line[i] >= 'A' && line[i] <= 'Z') {
+        if ((line[i] >= 'a' && line[i] <= 'z') || (line[i] >= 'A' && line[i] <= 'Z')) {
             val += line[i];
         } else if (!val.empty()) {
             l.push_back(val);
@@ -358,7 +340,7 @@ void extract_letter(const char *line, int size, int min_len, std::map<std::strin
 }
 
 // extract special part
-void extract_special(const char *line, int size, int min_len, std::map<std::string, int> &special_map) {
+void extract_special(const char *line, int size, unsigned int min_len, std::map<std::string, int> &special_map) {
     std::vector<std::string> s;
     std::string val;
     for (int i = 0; i < size; i++) {
@@ -440,11 +422,9 @@ void process_digit() {
     int arr_size = 256;
     int total_digit_long_number[arr_size];
     int total_digit_short_number[arr_size];
-    int digit_length[arr_size];
     for (int i = 0; i < arr_size; i++) {
         total_digit_long_number[i] = 0;
         total_digit_short_number[i] = 0;
-        digit_length[i] = 0;
     }
     for (it = digit_map_long.begin(); it != digit_map_long.end(); it++) {
         total_digit_long_number[it->first.size()] += it->second;
@@ -463,13 +443,11 @@ void process_digit() {
             float prob_new = prob_long * weight + prob_short * (1 - weight);
             auto *d = new Digit(it->first, prob_new);
             digit_group.push_back(d);
-            digit_length[it->first.size()] = 1;
         } else { // only long
             float prob_long = 1.0f * it->second / (float) total_digit_long_number[it->first.size()];
             float prob_new = prob_long * weight;
             auto *d = new Digit(it->first, prob_new);
             digit_group.push_back(d);
-            digit_length[it->first.size()] = 1;
         }
     }
     // only short
@@ -479,7 +457,6 @@ void process_digit() {
             float prob_new = prob_short * (1 - weight);
             auto *d = new Digit(it->first, prob_new);
             digit_group.push_back(d);
-            digit_length[it->first.size()] = 1;
         }
     }
     sort(digit_group.begin(), digit_group.end(), negative_sort_digit);
@@ -540,11 +517,9 @@ void process_special() {
     int arr_size = 256;
     int total_special_long_number[arr_size];
     int total_special_short_number[arr_size];
-    int special_length[arr_size];
     for (int i = 0; i < arr_size; i++) {
         total_special_long_number[i] = 0;
         total_special_short_number[i] = 0;
-        special_length[i] = 0;
     }
     for (it = special_map_long.begin(); it != special_map_long.end(); it++) {
         total_special_long_number[it->first.size()] += it->second;
@@ -564,13 +539,11 @@ void process_special() {
             float prob_new = prob_long * weight + prob_short * (1 - weight);
             auto *d = new Special(it->first, prob_new);
             special_group.push_back(d);
-            special_length[it->first.size()] = 1;
         } else { // only long
             float prob_long = 1.0f * it->second / (float) total_special_long_number[it->first.size()];
             float prob_new = prob_long * weight;
             auto *d = new Special(it->first, prob_new);
             special_group.push_back(d);
-            special_length[it->first.size()] = 1;
         }
     }
     // only short
@@ -580,7 +553,6 @@ void process_special() {
             float prob_new = prob_short * (1 - weight);
             auto *d = new Special(it->first, prob_new);
             special_group.push_back(d);
-            special_length[it->first.size()] = 1;
         }
     }
     sort(special_group.begin(), special_group.end(), negative_sort_special);
