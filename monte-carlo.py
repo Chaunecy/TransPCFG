@@ -1,27 +1,35 @@
+import argparse
+import itertools
 import re
 import sys
-import argparse
-import numpy as np
 from bisect import bisect_right
-from random import randint
-from math import log2, ceil
-from os.path import join as path_join, exists as path_exists, sep as path_sep
-from os import walk as files_walker
 from collections import defaultdict
+from math import log2, ceil
+from os import walk as files_walker
+from os.path import join as path_join, exists as path_exists, sep as path_sep
 from typing import DefaultDict
-import itertools
+
 import matplotlib.pyplot as plt
+import numpy as np
+
+
+def rand_key(a_dict: dict):
+    values = np.array(list(a_dict.values()))
+    val_sum = values.sum()
+    values /= val_sum
+    return np.random.choice(list(a_dict.keys()), p=values.ravel())
+    pass
 
 
 def gen_guess_crack(estimations: [int], upper_bound=10 ** 20):
-    guesses = [0]
-    cracked = [0]
     estimations.sort()
-    for m, n in itertools.groupby(estimations):
-        if m <= upper_bound:
-            guesses.append(m)
-            cracked.append((cracked[-1]) + len(list(n)))
-    return guesses[1:], cracked[1:]
+    gc_pairs = {}
+    for idx, est in enumerate(estimations):
+        if est < upper_bound:
+            gc_pairs[est] = idx
+        else:
+            break
+    return list(gc_pairs.keys()), list(gc_pairs.values())
     pass
 
 
@@ -69,29 +77,26 @@ class TransPCFGModel:
         pass
 
     def __generate_one(self) -> (str, float):
-        grammars_keys = list(self.__grammars.keys())
-        grammar_idx = randint(0, len(grammars_keys) - 1)
-
-        struct = grammars_keys[grammar_idx]
+        struct = rand_key(self.__grammars)
         guess = ""
         log_prob = -log2(self.__grammars.get(struct))
         for match in self.__grammar_pattern.finditer(struct):
             group = match.group()
             terminals = self.__terminals.get(group)
-            terminals_keys = list(terminals.keys())
-            terminal_idx = randint(0, len(terminals_keys) - 1)
-            terminal = terminals_keys[terminal_idx]
+            terminal = rand_key(terminals)
             guess += terminal
             log_prob += -log2(terminals.get(terminal))
         return guess, log_prob
 
     def sample(self):
+        print(f"Sample {self.__sample_size} guesses", file=sys.stderr)
         for i in range(self.__sample_size):
+            if i % 1024 == 0:
+                print(f"Sampling progress: {i / self.__sample_size * 100: 5.2f}%", file=sys.stderr)
             guess, log_prob = self.__generate_one()
             self.__sample_guesses.append(guess)
             self.__log_prob_of_samples.append(log_prob)
-            if i % 5000 == 0:
-                print(f"Progress: {i / self.__sample_size * 100: 5.2f}%", file=sys.stderr)
+        print("Sampling done!", file=sys.stderr)
 
     def log_prob(self, pwd):
         log_prob = 0
@@ -227,6 +232,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     if not path_exists(args.trained_model) or not path_exists(get_parent_dir(args.guess_crack_file)) \
             or not path_exists(get_parent_dir(args.save_gc_curve)) or not path_exists(args.test_set):
+        print("Check whether you type in an invalid path or not!")
         sys.exit(1)
     transPCFGModel = TransPCFGModel.build(args.trained_model, args.sample_size, args.test_set, args.upper_bound)
     if args.prob_mode:
